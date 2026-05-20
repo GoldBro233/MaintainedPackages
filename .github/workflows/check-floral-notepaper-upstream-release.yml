@@ -1,0 +1,136 @@
+name: Check floral-notepaper Upstream Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_to_aur:
+        description: Push updated PKGBUILD and .SRCINFO to AUR after a successful build
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: "0 */6 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: check-floral-notepaper-upstream-release
+  cancel-in-progress: false
+
+env:
+  PACKAGE_NAME: floral-notepaper
+  PACKAGE_DIR: packages/floral-notepaper
+  UPSTREAM_REPO: Achilng/floral-notepaper
+  TAG_PREFIX: v
+  AUR_REMOTE_URL: ssh://aur@aur.archlinux.org/floral-notepaper.git
+  AUR_TARGET_BRANCH: master
+
+jobs:
+  update-and-build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Install workflow dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git curl jq nodejs openssh pacman-contrib
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare build user
+        run: |
+          id builder &>/dev/null || useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          install -d -m 0755 -o builder -g builder /home/builder/.cache /home/builder/.config
+
+      - name: Detect latest upstream release
+        id: detect
+        run: |
+          set -euo pipefail
+          scripts/package-release.sh detect-latest >> "$GITHUB_OUTPUT"
+
+      - name: Decide whether to push to AUR
+        id: push_mode
+        run: |
+          echo "push_to_aur=${{ github.event_name != 'workflow_dispatch' || inputs.push_to_aur }}" >> "$GITHUB_OUTPUT"
+
+      - name: Add workflow summary
+        run: |
+          {
+            echo "## Upstream Version Check"
+            echo ""
+            echo "- Package: \`${PACKAGE_NAME}\`"
+            echo "- Current pkgver: \`${{ steps.detect.outputs.current_version }}\`"
+            echo "- Latest upstream tag: \`${{ steps.detect.outputs.latest_tag }}\`"
+            echo "- Parsed upstream version: \`${{ steps.detect.outputs.latest_version }}\`"
+            echo "- Update available: \`${{ steps.detect.outputs.has_update }}\`"
+            echo "- Push to AUR enabled: \`${{ steps.push_mode.outputs.push_to_aur }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install package build dependencies
+        if: steps.detect.outputs.has_update == 'true'
+        run: |
+          set -euo pipefail
+          scripts/package-release.sh install-build-deps
+
+      - name: Update PKGBUILD and .SRCINFO
+        if: steps.detect.outputs.has_update == 'true'
+        env:
+          LATEST_VERSION: ${{ steps.detect.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+          runuser -u builder -- env HOME="/home/builder" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" PACKAGE_DIR="$PACKAGE_DIR" LATEST_VERSION="$LATEST_VERSION" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" update-package
+
+      - name: Build package
+        if: steps.detect.outputs.has_update == 'true'
+        run: |
+          set -euo pipefail
+          runuser -u builder -- env HOME="/home/builder" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" PACKAGE_DIR="$PACKAGE_DIR" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" build-package
+
+      - name: Configure SSH for AUR
+        if: steps.detect.outputs.has_update == 'true' && steps.push_mode.outputs.push_to_aur == 'true'
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY || secrets.AUR_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS || secrets.AUR_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${SSH_PRIVATE_KEY:-}" ]]; then
+            echo "SSH_PRIVATE_KEY secret is required" >&2
+            exit 1
+          fi
+
+          runuser -u builder -- env HOME="/home/builder" SSH_PRIVATE_KEY="$SSH_PRIVATE_KEY" SSH_KNOWN_HOSTS="${SSH_KNOWN_HOSTS:-}" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" configure-ssh
+
+      - name: Push updated metadata to AUR
+        if: steps.detect.outputs.has_update == 'true' && steps.push_mode.outputs.push_to_aur == 'true'
+        env:
+          LATEST_VERSION: ${{ steps.detect.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+          runuser -u builder -- env HOME="/home/builder" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" PACKAGE_DIR="$PACKAGE_DIR" \
+            AUR_REMOTE_URL="$AUR_REMOTE_URL" AUR_TARGET_BRANCH="$AUR_TARGET_BRANCH" LATEST_VERSION="$LATEST_VERSION" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" push-aur
+
+      - name: Push updated metadata back to GitHub
+        if: steps.detect.outputs.has_update == 'true' && steps.push_mode.outputs.push_to_aur == 'true'
+        env:
+          GITHUB_TARGET_BRANCH: ${{ github.ref_name }}
+          LATEST_VERSION: ${{ steps.detect.outputs.latest_version }}
+        run: |
+          set -euo pipefail
+          runuser -u builder -- env HOME="/home/builder" GITHUB_WORKSPACE="$GITHUB_WORKSPACE" PACKAGE_DIR="$PACKAGE_DIR" \
+            GITHUB_TARGET_BRANCH="$GITHUB_TARGET_BRANCH" PACKAGE_NAME="$PACKAGE_NAME" LATEST_VERSION="$LATEST_VERSION" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" push-github
