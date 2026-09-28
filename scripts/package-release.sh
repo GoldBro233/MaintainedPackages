@@ -156,16 +156,15 @@ push_aur() {
   require_env AUR_TARGET_BRANCH
   require_env LATEST_VERSION
 
-  local workdir cleanup_cmd
+  local workdir cleanup_cmd relative_path
+  local -a metadata_paths=() extra_files=()
   workdir="$(mktemp -d)"
   printf -v cleanup_cmd 'rm -rf -- %q' "$workdir"
   trap "$cleanup_cmd" EXIT
 
   git clone "$AUR_REMOTE_URL" "$workdir/aur"
-  find "$workdir/aur" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
 
   while IFS= read -r file; do
-    local relative_path
     relative_path="${file#${PACKAGE_DIR}/}"
 
     if [[ ! -f "$GITHUB_WORKSPACE/$file" ]]; then
@@ -175,13 +174,25 @@ push_aur() {
 
     mkdir -p "$workdir/aur/$(dirname "$relative_path")"
     cp "$GITHUB_WORKSPACE/$file" "$workdir/aur/$relative_path"
+    metadata_paths+=("$relative_path")
   done < <(package_metadata_files)
+  read -r -a extra_files <<< "${AUR_EXTRA_FILES:-}"
+  for relative_path in "${extra_files[@]}"; do
+    if [[ ! -f "$GITHUB_WORKSPACE/$PACKAGE_DIR/$relative_path" ]]; then
+      echo "Expected AUR file does not exist: $PACKAGE_DIR/$relative_path" >&2
+      exit 1
+    fi
+
+    mkdir -p "$workdir/aur/$(dirname "$relative_path")"
+    cp "$GITHUB_WORKSPACE/$PACKAGE_DIR/$relative_path" "$workdir/aur/$relative_path"
+    metadata_paths+=("$relative_path")
+  done
 
   cd "$workdir/aur"
   git config user.name "github-actions[bot]"
   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-  git add -A
+  git add -- "${metadata_paths[@]}"
   if git diff --cached --quiet; then
     echo "No AUR metadata changes to push."
     return

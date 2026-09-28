@@ -82,20 +82,30 @@ assert_not_contains() {
   fi
 }
 
-test_push_aur_no_diff_exits_successfully() {
-  local workspace="$tmpdir/workspace"
-  local aur_worktree="$tmpdir/aur-worktree"
-  local aur_remote="$tmpdir/aur.git"
-  local output="$tmpdir/push-aur.out"
+test_push_aur_preserves_existing_files() {
+  local workspace="$tmpdir/workspace-preserve"
+  local aur_worktree="$tmpdir/aur-worktree-preserve"
+  local aur_remote="$tmpdir/aur-preserve.git"
+  local output="$tmpdir/push-aur-preserve.out"
 
   mkdir -p "$workspace" "$aur_worktree"
   create_git_workspace "$workspace"
   create_aur_remote_with_matching_metadata "$workspace" "$aur_worktree" "$aur_remote"
 
+  printf "Repository license\n" > "$aur_worktree/LICENSE"
+  printf "Upstream license\n" > "$aur_worktree/tokscale-LICENSE"
+  git -C "$aur_worktree" add LICENSE tokscale-LICENSE
+  git -C "$aur_worktree" commit -q -m "Add AUR license files"
+  git -C "$aur_worktree" push -q origin HEAD:master
+
+  sed -i -E "s/^pkgrel=.*/pkgrel=2/" "$workspace/packages/aio-coding-hub-bin/PKGBUILD"
+  printf "Updated upstream license\n" > "$workspace/packages/aio-coding-hub-bin/tokscale-LICENSE"
+
   if ! GIT_CONFIG_GLOBAL="/dev/null" \
     GIT_CONFIG_NOSYSTEM="1" \
     GITHUB_WORKSPACE="$workspace" \
     PACKAGE_DIR="packages/aio-coding-hub-bin" \
+    AUR_EXTRA_FILES="tokscale-LICENSE" \
     AUR_REMOTE_URL="$aur_remote" \
     AUR_TARGET_BRANCH="master" \
     LATEST_VERSION="0.40.8" \
@@ -104,7 +114,9 @@ test_push_aur_no_diff_exits_successfully() {
     exit 1
   fi
 
-  assert_contains "$output" "No AUR metadata changes to push."
+  [[ "$(git --git-dir="$aur_remote" show master:LICENSE)" == "Repository license" ]]
+  [[ "$(git --git-dir="$aur_remote" show master:tokscale-LICENSE)" == "Updated upstream license" ]]
+  [[ "$(git --git-dir="$aur_remote" show master:PKGBUILD)" == *"pkgrel=2"* ]]
 }
 
 test_push_aur_ignores_tracked_build_artifacts() {
@@ -176,6 +188,6 @@ test_push_github_ignores_tracked_build_artifacts() {
   assert_not_contains "$pushed_files" "pkg/"
 }
 
-test_push_aur_no_diff_exits_successfully
+test_push_aur_preserves_existing_files
 test_push_aur_ignores_tracked_build_artifacts
 test_push_github_ignores_tracked_build_artifacts
