@@ -1,0 +1,36 @@
+name: Check Maintenance
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  behavior:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install test tools
+        run: pacman -Syu --noconfirm --needed git curl jq nodejs openssh pacman-contrib
+
+      - name: Checkout source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Run isolated behavior tests
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          runuser -u builder -- env HOME=/home/builder GIT_CONFIG_NOSYSTEM=1 \
+            GIT_CONFIG_GLOBAL=/home/builder/.gitconfig bash "$GITHUB_WORKSPACE/tests/test_package_config.sh"
+          runuser -u builder -- env HOME=/home/builder GIT_CONFIG_NOSYSTEM=1 \
+            GIT_CONFIG_GLOBAL=/home/builder/.gitconfig bash "$GITHUB_WORKSPACE/tests/test_package_release.sh"

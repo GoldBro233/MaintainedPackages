@@ -1,0 +1,176 @@
+name: Release Package
+
+on:
+  workflow_call:
+    inputs:
+      package:
+        required: true
+        type: string
+      publish:
+        required: true
+        type: boolean
+      force_build:
+        required: true
+        type: boolean
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: package-maintenance-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    outputs:
+      needs_build: ${{ steps.prepare.outputs.needs_build }}
+      needs_publish: ${{ steps.prepare.outputs.needs_publish }}
+      candidate_version: ${{ steps.prepare.outputs.candidate_version }}
+      artifact_id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Install metadata tools
+        run: pacman -Syu --noconfirm --needed git curl jq nodejs pacman-contrib
+
+      - name: Checkout trusted source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Create unprivileged builder
+        run: useradd -m builder
+
+      - name: Prepare immutable candidate
+        id: prepare
+        env:
+          PACKAGE: ${{ inputs.package }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+          PUBLISH: ${{ inputs.publish }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH" == true && "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo 'Publishing is only allowed from the default branch' >&2
+            exit 1
+          fi
+          runuser -u builder -- env HOME=/home/builder SOURCE_COMMIT="$SOURCE_COMMIT" FORCE_BUILD="$FORCE_BUILD" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" prepare "$PACKAGE" /home/builder/candidate | tee "$GITHUB_OUTPUT"
+
+      - name: Upload candidate
+        id: upload
+        if: steps.prepare.outputs.needs_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: candidate-${{ inputs.package }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /home/builder/candidate/
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: false
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.needs_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build tools
+        run: pacman -Syu --noconfirm --needed git curl jq nodejs pacman-contrib
+
+      - name: Checkout trusted source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download prepared candidate
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: /tmp/package-candidate
+          merge-multiple: true
+
+      - name: Install candidate dependencies
+        env:
+          PACKAGE: ${{ inputs.package }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          chmod -R a-w /tmp/package-candidate
+          "$GITHUB_WORKSPACE/scripts/package-release.sh" install-build-deps "$PACKAGE" /tmp/package-candidate
+
+      - name: Build as unprivileged user
+        env:
+          PACKAGE: ${{ inputs.package }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          runuser -u builder -- env HOME=/home/builder SOURCE_COMMIT="$SOURCE_COMMIT" \
+            "$GITHUB_WORKSPACE/scripts/package-release.sh" build "$PACKAGE" /tmp/package-candidate /home/builder/build
+
+  publish:
+    needs: [prepare, build]
+    if: inputs.publish && needs.prepare.outputs.needs_publish == 'true' && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: archlinux:base-devel
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install publish tools
+        run: pacman -Syu --noconfirm --needed git curl jq nodejs openssh pacman-contrib
+
+      - name: Checkout trusted source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Guard default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo 'Publishing is only allowed from the default branch' >&2
+            exit 1
+          fi
+
+      - name: Download prepared candidate
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.prepare.outputs.artifact_id }}
+          path: /tmp/package-candidate
+          merge-multiple: true
+
+      - name: Publish validated candidate
+        env:
+          PACKAGE: ${{ inputs.package }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          GITHUB_TARGET_BRANCH: ${{ github.event.repository.default_branch }}
+          GITHUB_TOKEN: ${{ github.token }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/scripts/package-release.sh" publish "$PACKAGE" /tmp/package-candidate

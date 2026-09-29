@@ -1,0 +1,76 @@
+name: Maintain Packages
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Package to maintain (empty selects all enabled packages)
+        type: string
+        required: false
+        default: ""
+      publish:
+        description: Publish successful builds to AUR and GitHub
+        type: boolean
+        required: false
+        default: false
+      force_build:
+        description: Build even when both remotes are in sync
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      count: ${{ steps.select.outputs.count }}
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Select enabled packages
+        id: select
+        env:
+          SELECTED_PACKAGE: ${{ inputs.package }}
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH" == true && "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo 'Publishing is only allowed from the default branch' >&2
+            exit 1
+          fi
+          if [[ -n "$SELECTED_PACKAGE" ]]; then
+            matrix="$(scripts/package-release.sh matrix "$SELECTED_PACKAGE")"
+          else
+            matrix="$(scripts/package-release.sh matrix)"
+          fi
+          count="$(jq -er '.include | length' <<< "$matrix")"
+          printf 'matrix=%s\ncount=%s\n' "$matrix" "$count" >> "$GITHUB_OUTPUT"
+
+  maintain:
+    needs: select
+    if: needs.select.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-package.yml
+    with:
+      package: ${{ matrix.package }}
+      publish: ${{ github.event_name == 'schedule' || inputs.publish }}
+      force_build: ${{ github.event_name == 'workflow_dispatch' && inputs.force_build || false }}
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}

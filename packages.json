@@ -1,0 +1,8 @@
+{
+  "packages": [
+    {"name": "aio-coding-hub-bin", "enabled": true, "upstream_repo": "dyndynjyxa/aio-coding-hub", "tag_prefix": "aio-coding-hub-v"},
+    {"name": "tokscale-bin", "enabled": true, "upstream_repo": "junhoyeo/tokscale", "tag_prefix": "v", "aur_extra_files": ["tokscale-LICENSE"]},
+    {"name": "zigfetch", "enabled": true, "upstream_repo": "utox39/zigfetch", "tag_prefix": "v"},
+    {"name": "floral-notepaper", "enabled": false, "upstream_repo": "Achilng/floral-notepaper", "tag_prefix": "v"}
+  ]
+}
