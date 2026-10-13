@@ -243,15 +243,16 @@ prepare_candidate() {
     [[ "$(blob_hash "$repo_root" "$source" "packages/$name/$file")" != null ]] || fail "Missing tracked source: $file"
     git_root show "$source:packages/$name/$file" > "$temp/trusted/$file" || fail "Cannot copy trusted input"
   done
-  metadata "$temp/trusted" "$temp/current.SRCINFO"
-  current_pkgver="$src_pkgver"
+  # Install hooks are required by makepkg even when only generating metadata.
   for file in "${managed_files[@]:2}"; do
     hash="$(blob_hash "$repo_root" "$source" "packages/$name/$file")"
-    if [[ "$hash" != null ]] && ! grep -Fq "source = $file::" "$temp/current.SRCINFO"; then
+    if [[ "$hash" != null ]] && ! grep -Fq "source = $file::" "$temp/trusted/.SRCINFO"; then
       mkdir -p "$temp/trusted/$(dirname "$file")"
       git_root show "$source:packages/$name/$file" > "$temp/trusted/$file" || fail "Cannot copy local source"
     fi
   done
+  metadata "$temp/trusted" "$temp/current.SRCINFO"
+  current_pkgver="$src_pkgver"
   latest_version
   compare_versions "$latest" "$current_pkgver"
   if (( version_order > 0 )); then

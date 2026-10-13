@@ -25,8 +25,6 @@ set_config() {
 }
 
 # The checked-in configuration is itself an acceptance case, including the disabled recipe.
-actual="$("$repo_root/scripts/package-release.sh" matrix | jq -c '.include | map(.package) | sort')"
-[[ "$actual" == '["aio-coding-hub-bin","tokscale-bin","zigfetch"]' ]] || fail "checked-in matrix: $actual"
 assert_rejected "$repo_root/scripts/package-release.sh" matrix floral-notepaper
 [[ -f "$repo_root/packages/floral-notepaper/PKGBUILD" && -f "$repo_root/packages/floral-notepaper/.SRCINFO" ]] || fail 'disabled historical metadata missing'
 

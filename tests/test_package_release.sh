@@ -132,6 +132,23 @@ assert_aur_file() {
   [[ "$(git --git-dir="$fixture/$name.git" show "master:$file")" == "$expected" ]] || fail "incorrect AUR $name:$file"
 }
 
+# Install hooks must be available for metadata, updates, and the built package.
+init_fixture
+printf '\ninstall=fixture.install\n' >> "$repo/packages/fixture-bin/PKGBUILD"
+printf 'post_install() { printf "%%s\\n" "Enable the fixture service"; }\n' > "$repo/packages/fixture-bin/fixture.install"
+(cd "$repo/packages/fixture-bin" && makepkg --printsrcinfo > .SRCINFO)
+jq '.packages[0].aur_extra_files += ["fixture.install"]' "$repo/packages.json" > "$fixture/config.new"
+mv "$fixture/config.new" "$repo/packages.json"
+(cd "$repo" && git add packages.json packages/fixture-bin && git commit -q -m 'Add package install hook' && git push -q origin HEAD:main)
+source_commit="$(git -C "$repo" rev-parse HEAD)"
+set_upstream 1.3.0
+prepare > /dev/null
+SOURCE_COMMIT="$source_commit" "$repo/scripts/package-release.sh" build fixture-bin "$fixture/candidate-fixture-bin" "$fixture/build" > /dev/null
+bsdtar -xOf "$fixture/build/fixture-bin-1.3.0-1-x86_64.pkg.tar.zst" .INSTALL > "$fixture/built.install"
+[[ "$(source "$fixture/built.install"; post_install)" == 'Enable the fixture service' ]] || fail 'built package lost its install instructions'
+publish > /dev/null
+assert_aur_file fixture-bin fixture.install 'post_install() { printf "%s\n" "Enable the fixture service"; }'
+
 # A genuinely empty AUR repository is the only permitted initial-publish baseline.
 init_fixture
 git --git-dir="$fixture/fixture-bin.git" update-ref -d refs/heads/master
