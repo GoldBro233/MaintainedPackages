@@ -1,8 +1,6 @@
 name: Maintain Packages
 
 on:
-  schedule:
-    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       package:
@@ -39,6 +37,15 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Build maintenance CLI
+        run: CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$RUNNER_TEMP/maintpkg" ./cmd/maintpkg
+
       - name: Select enabled packages
         id: select
         env:
@@ -52,9 +59,9 @@ jobs:
             exit 1
           fi
           if [[ -n "$SELECTED_PACKAGE" ]]; then
-            matrix="$(scripts/package-release.sh matrix "$SELECTED_PACKAGE")"
+            matrix="$("$RUNNER_TEMP/maintpkg" --repo "$GITHUB_WORKSPACE" matrix "$SELECTED_PACKAGE")"
           else
-            matrix="$(scripts/package-release.sh matrix)"
+            matrix="$("$RUNNER_TEMP/maintpkg" --repo "$GITHUB_WORKSPACE" matrix)"
           fi
           count="$(jq -er '.include | length' <<< "$matrix")"
           printf 'matrix=%s\ncount=%s\n' "$matrix" "$count" >> "$GITHUB_OUTPUT"

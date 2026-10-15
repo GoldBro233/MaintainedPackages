@@ -19,18 +19,40 @@ jobs:
         shell: bash
     steps:
       - name: Install test tools
-        run: pacman -Syu --noconfirm --needed git curl jq nodejs openssh pacman-contrib
+        run: pacman -Syu --noconfirm --needed go git curl jq nodejs openssh pacman-contrib
 
       - name: Checkout source
         uses: actions/checkout@v5
         with:
           persist-credentials: false
 
+      - name: Check system Go version
+        id: go
+        run: |
+          version="$(GOTOOLCHAIN=local go env GOVERSION)"
+          version="${version#go}"
+          IFS=. read -r major minor _ <<< "$version"
+          if (( major > 1 || (major == 1 && minor >= 27) )); then
+            echo 'fallback=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'fallback=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up required Go version
+        if: steps.go.outputs.fallback == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: false
+
       - name: Run isolated behavior tests
         run: |
           set -euo pipefail
           useradd -m builder
-          runuser -u builder -- env HOME=/home/builder GIT_CONFIG_NOSYSTEM=1 \
-            GIT_CONFIG_GLOBAL=/home/builder/.gitconfig bash "$GITHUB_WORKSPACE/tests/test_package_config.sh"
-          runuser -u builder -- env HOME=/home/builder GIT_CONFIG_NOSYSTEM=1 \
-            GIT_CONFIG_GLOBAL=/home/builder/.gitconfig bash "$GITHUB_WORKSPACE/tests/test_package_release.sh"
+          go_bin="$(command -v go)"
+          runuser -u builder -- env HOME=/home/builder GOCACHE=/home/builder/.cache/go-build \
+            GOMODCACHE=/home/builder/go/pkg/mod GOTOOLCHAIN=local \
+            "$go_bin" -C "$GITHUB_WORKSPACE" test ./...
+          runuser -u builder -- env HOME=/home/builder GOCACHE=/home/builder/.cache/go-build \
+            GOMODCACHE=/home/builder/go/pkg/mod GOTOOLCHAIN=local \
+            "$go_bin" -C "$GITHUB_WORKSPACE" test -tags=integration ./... -run '^(TestIntegration|TestMakepkg)' -count=1 -timeout=20m

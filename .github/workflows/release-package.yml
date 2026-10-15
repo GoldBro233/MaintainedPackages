@@ -40,13 +40,35 @@ jobs:
       artifact_id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - name: Install metadata tools
-        run: pacman -Syu --noconfirm --needed git curl jq nodejs pacman-contrib
+        run: pacman -Syu --noconfirm --needed go git curl jq nodejs pacman-contrib
 
       - name: Checkout trusted source
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check system Go version
+        id: go
+        run: |
+          version="$(GOTOOLCHAIN=local go env GOVERSION)"
+          version="${version#go}"
+          IFS=. read -r major minor _ <<< "$version"
+          if (( major > 1 || (major == 1 && minor >= 27) )); then
+            echo 'fallback=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'fallback=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up required Go version
+        if: steps.go.outputs.fallback == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Build maintenance CLI
+        run: CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o /usr/local/bin/maintpkg ./cmd/maintpkg
 
       - name: Create unprivileged builder
         run: useradd -m builder
@@ -66,7 +88,7 @@ jobs:
             exit 1
           fi
           runuser -u builder -- env HOME=/home/builder SOURCE_COMMIT="$SOURCE_COMMIT" FORCE_BUILD="$FORCE_BUILD" \
-            "$GITHUB_WORKSPACE/scripts/package-release.sh" prepare "$PACKAGE" /home/builder/candidate | tee "$GITHUB_OUTPUT"
+            /usr/local/bin/maintpkg --repo "$GITHUB_WORKSPACE" prepare "$PACKAGE" /home/builder/candidate | tee "$GITHUB_OUTPUT"
 
       - name: Upload candidate
         id: upload
@@ -92,13 +114,35 @@ jobs:
         shell: bash
     steps:
       - name: Install build tools
-        run: pacman -Syu --noconfirm --needed git curl jq nodejs pacman-contrib
+        run: pacman -Syu --noconfirm --needed go git curl jq nodejs pacman-contrib
 
       - name: Checkout trusted source
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check system Go version
+        id: go
+        run: |
+          version="$(GOTOOLCHAIN=local go env GOVERSION)"
+          version="${version#go}"
+          IFS=. read -r major minor _ <<< "$version"
+          if (( major > 1 || (major == 1 && minor >= 27) )); then
+            echo 'fallback=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'fallback=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up required Go version
+        if: steps.go.outputs.fallback == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Build maintenance CLI
+        run: CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o /usr/local/bin/maintpkg ./cmd/maintpkg
 
       - name: Download prepared candidate
         uses: actions/download-artifact@v4
@@ -114,7 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           chmod -R a-w /tmp/package-candidate
-          "$GITHUB_WORKSPACE/scripts/package-release.sh" install-build-deps "$PACKAGE" /tmp/package-candidate
+          /usr/local/bin/maintpkg --repo "$GITHUB_WORKSPACE" install-build-deps "$PACKAGE" /tmp/package-candidate
 
       - name: Build as unprivileged user
         env:
@@ -124,7 +168,7 @@ jobs:
           set -euo pipefail
           useradd -m builder
           runuser -u builder -- env HOME=/home/builder SOURCE_COMMIT="$SOURCE_COMMIT" \
-            "$GITHUB_WORKSPACE/scripts/package-release.sh" build "$PACKAGE" /tmp/package-candidate /home/builder/build
+            /usr/local/bin/maintpkg --repo "$GITHUB_WORKSPACE" build "$PACKAGE" /tmp/package-candidate /home/builder/build
 
   publish:
     needs: [prepare, build]
@@ -139,13 +183,35 @@ jobs:
         shell: bash
     steps:
       - name: Install publish tools
-        run: pacman -Syu --noconfirm --needed git curl jq nodejs openssh pacman-contrib
+        run: pacman -Syu --noconfirm --needed go git curl jq nodejs openssh pacman-contrib
 
       - name: Checkout trusted source
         uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Check system Go version
+        id: go
+        run: |
+          version="$(GOTOOLCHAIN=local go env GOVERSION)"
+          version="${version#go}"
+          IFS=. read -r major minor _ <<< "$version"
+          if (( major > 1 || (major == 1 && minor >= 27) )); then
+            echo 'fallback=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'fallback=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up required Go version
+        if: steps.go.outputs.fallback == 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.x'
+          cache: false
+
+      - name: Build maintenance CLI
+        run: CGO_ENABLED=0 GOTOOLCHAIN=local go build -trimpath -buildvcs=false -o /usr/local/bin/maintpkg ./cmd/maintpkg
 
       - name: Guard default branch
         env:
@@ -173,4 +239,4 @@ jobs:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          "$GITHUB_WORKSPACE/scripts/package-release.sh" publish "$PACKAGE" /tmp/package-candidate
+          /usr/local/bin/maintpkg --repo "$GITHUB_WORKSPACE" publish "$PACKAGE" /tmp/package-candidate
