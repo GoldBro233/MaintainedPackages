@@ -140,7 +140,7 @@ sudo env SOURCE_COMMIT="$SOURCE_COMMIT" \
 ## CI、发布与恢复
 
 - `Check Maintenance`：push / pull request 以普通用户运行 Go 离线测试与隔离集成测试，不执行生产发布。
-- `Maintain Packages`：Go CLI 上线验证期间暂停定时触发；首发完成后恢复 `0 */6 * * *`（UTC）。手动输入 `package` 留空时选择全部启用包，`publish` 和 `force_build` 默认均为 `false`。
+- `Maintain Packages`：cron 为 `0 */6 * * *`（UTC），计划任务启用发布；手动输入 `package` 留空时选择全部启用包，`publish` 和 `force_build` 默认均为 `false`。
 - `Release Package`：按包执行 `prepare → build → publish`。候选通过不可覆盖的 Actions artifact 传递，并包含隐藏文件 .SRCINFO。构建 job 不接收发布凭据；发布要求构建成功、`needs_publish=true` 且调用方启用发布。
 - 每包使用 `package-maintenance-<name>` 并发组，运行不会互相取消。不同包可以并行维护。
 - 工作流限制从默认分支发布；CLI 进一步要求 `GITHUB_TARGET_BRANCH=main`。迁移默认分支时两处都要处理。各阶段从同一 github.sha 独立编译 CLI，发布凭据只注入 publish 步骤。
@@ -154,7 +154,7 @@ gh workflow run maintain-packages.yml \
   -f "package=$package" -f publish=false -f force_build=true
 ```
 
-需要发布时在任务授权范围内使用相同工作流，将 `publish` 设为 `true`。推送到 main 本身只触发检查，发布由维护工作流处理；恢复定时触发后，计划任务也会自动发布。
+需要发布时在任务授权范围内使用相同工作流，将 `publish` 设为 `true`。推送到 main 本身只触发检查，发布由维护工作流处理；计划任务也会自动发布。
 
 `publish` 需要 `SOURCE_COMMIT`、`GITHUB_TARGET_BRANCH`；有 AUR 写入时需要 `AUR_SSH_PRIVATE_KEY`，有 GitHub 回写时需要 `GITHUB_TOKEN`。CI 分别从同名 secret 和 `github.token` 提供凭据。AUR 使用固定 known_hosts、公钥校验及隔离 SSH 配置，不关闭主机校验，不将凭据写入仓库或文档。
 
