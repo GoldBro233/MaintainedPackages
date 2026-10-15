@@ -4,6 +4,7 @@
     {"name": "tokscale-bin", "enabled": true, "upstream_repo": "junhoyeo/tokscale", "tag_prefix": "v", "aur_extra_files": ["tokscale-LICENSE"]},
     {"name": "zigfetch", "enabled": true, "upstream_repo": "utox39/zigfetch", "tag_prefix": "v"},
     {"name": "picoforge-bin", "enabled": true, "upstream_repo": "librekeys/picoforge", "tag_prefix": "v", "aur_extra_files": ["LICENSE", "picoforge-LICENSE", "picoforge-bin.install"]},
+    {"name": "wlan-auto-login-bin", "enabled": true, "upstream_repo": "SEUCXCS/wlan-auto-login", "tag_prefix": "v"},
     {"name": "floral-notepaper", "enabled": false, "upstream_repo": "Achilng/floral-notepaper", "tag_prefix": "v"}
   ]
 }
