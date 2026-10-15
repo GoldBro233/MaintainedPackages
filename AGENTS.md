@@ -1,6 +1,6 @@
 # Agent 工作指南
 
-本仓库维护 Arch Linux / AUR 包配方，以 `packages.json` 驱动 Go 维护 CLI `maintpkg` 和 GitHub Actions。GitHub 仓库为 `GoldBro233/MaintainedPackages`，发布目标为 GitHub `main` 和各包 AUR 仓库的 `master`。这里维护打包文件，不维护应用源码。
+本仓库维护 Arch Linux / AUR 包配方及 Go 维护工具源码，以 `packages.json` 驱动 CLI `maintpkg` 和 GitHub Actions。上游应用的源码或发布产物由各包的 PKGBUILD 获取。GitHub 仓库为 `GoldBro233/MaintainedPackages`，发布目标为 GitHub `main` 和各包 AUR 仓库的 `master`。
 
 ## 进入仓库时先获取状态
 
@@ -11,9 +11,10 @@ git status --short --branch
 git remote -v
 git log -5 --oneline
 jq -r '.packages[] | [.name, .enabled, .upstream_repo, .tag_prefix] | @tsv' packages.json
+repo_root="$PWD"
 cli_bin_dir="$(mktemp -d /tmp/maintpkg-cli.XXXXXX)"
 CGO_ENABLED=0 go build -trimpath -buildvcs=false -o "$cli_bin_dir/maintpkg" ./cmd/maintpkg
-"$cli_bin_dir/maintpkg" --repo "$PWD" matrix
+"$cli_bin_dir/maintpkg" --repo "$repo_root" matrix
 ```
 
 - 工作区修改可能属于用户，先理解现有改动，再继续工作。
@@ -34,19 +35,25 @@ gh run view RUN_ID --repo GoldBro233/MaintainedPackages --log-failed
 
 | 入口 | 用途 |
 | --- | --- |
-| `packages.json` | 包登记、启用状态、上游 GitHub 仓库、标签前缀和 AUR 附加文件白名单 |
+| [packages.json](packages.json) | 包登记、启用状态、上游 GitHub 仓库、标签前缀和 AUR 附加文件白名单 |
 | `packages/<name>/PKGBUILD` | 版本、来源、校验和、依赖及打包实现 |
 | `packages/<name>/.SRCINFO` | 由 `makepkg --printsrcinfo` 生成、提交给 AUR 的元数据 |
 | `packages/<name>/AGENTS.md` | 按需读取的单包打包方式、特殊约束与验证重点 |
-| `cmd/maintpkg/main.go`、`internal/cli/` | CLI 入口、参数、环境变量与输出；提供 `matrix`、`prepare`、`install-build-deps`、`build`、`publish` |
-| `internal/maintenance/` | 配置、路径、元数据、候选、外部命令、Git 与发布状态机 |
-| `go.mod` | Go 1.27 最低版本；仅使用标准库 |
-| `.github/workflows/maintain-packages.yml` | 定时及手动维护入口，按包生成矩阵 |
-| `.github/workflows/release-package.yml` | 可复用的候选准备、构建、发布流水线 |
-| `.github/workflows/check-maintenance.yml` | push / pull request 的行为测试 |
-| `.github/aur_known_hosts` | 发布时固定使用的 AUR SSH 主机公钥 |
-| `internal/cli/*_test.go`、`internal/maintenance/*_test.go` | 默认离线测试：参数、配置、路径、元数据与候选校验 |
-| `internal/maintenance/integration*_test.go` | `integration` 标签：真实 makepkg、本地 Git 远端、并发与失败恢复 |
+| [cmd/maintpkg/main.go](cmd/maintpkg/main.go) | 进程入口：建立信号取消 context，调用 CLI 并返回退出码 |
+| [internal/cli/cli.go](internal/cli/cli.go) | 五个子命令的参数、环境变量、标准流和退出码；调用 maintenance Service |
+| [service.go](internal/maintenance/service.go)、[process.go](internal/maintenance/process.go) | Service 依赖、操作参数、矩阵选择；Runner/ExecRunner 和逐命令执行环境 |
+| [config.go](internal/maintenance/config.go)、[paths.go](internal/maintenance/paths.go) | 包登记校验、受管文件列表、路径边界、普通文件与 SHA-256 |
+| [srcinfo.go](internal/maintenance/srcinfo.go)、[candidate.go](internal/maintenance/candidate.go) | .SRCINFO 与依赖解析、vercmp 比较；manifest 和候选精确文件集合校验 |
+| [prepare.go](internal/maintenance/prepare.go)、[build.go](internal/maintenance/build.go) | 上游查询、可信配方准备、来源验证、依赖安装及独立构建 |
+| [git.go](internal/maintenance/git.go)、[publish.go](internal/maintenance/publish.go) | Git blob/树、AUR 基线、受信任输入、两端同步、竞争重试和部分失败状态 |
+| [go.mod](go.mod) | 单一 Go 模块，最低 Go 1.27.0；仅使用标准库 |
+| [.github/workflows/maintain-packages.yml](.github/workflows/maintain-packages.yml) | 定时及手动维护入口，按包生成矩阵 |
+| [.github/workflows/release-package.yml](.github/workflows/release-package.yml) | 可复用的候选准备、构建、发布流水线 |
+| [.github/workflows/check-maintenance.yml](.github/workflows/check-maintenance.yml) | push / pull request 的 Go 行为测试 |
+| [.github/aur_known_hosts](.github/aur_known_hosts) | 发布时固定使用的 AUR SSH 主机公钥 |
+| `internal/cli/*_test.go`、`internal/maintenance/*_test.go` | 测试与职责文件相邻；无 integration 标签的测试默认运行 |
+| `internal/maintenance/integration*_test.go` | integration 标签下的真实工具验收：主流程、附加文件与信任检查、发布竞争和恢复 |
+| [integration_helpers_test.go](internal/maintenance/integration_helpers_test.go)、[testdata/hook/main.go](internal/maintenance/testdata/hook/main.go) | 隔离夹具及编译后用于模拟远端拒绝的 Go pre-receive hook |
 | `temp/` | 已忽略的本地试验和历史构建产物；不代表当前已发布状态 |
 
 主要环境是 Arch Linux。CI 使用 `archlinux:base-devel`，安装 `go git curl jq nodejs pacman-contrib`，发布和行为测试还使用 `openssh`。`nodejs` 用于 Actions 执行环境，不是所有包的构建依赖。Go 版本须满足 go.mod；系统工具链不足时，CI 使用 `actions/setup-go` 提供 1.27.x。
@@ -59,6 +66,18 @@ gh run view RUN_ID --repo GoldBro233/MaintainedPackages --log-failed
 - `gh`：可选的远端状态查询和工作流触发工具；维护 CLI 本身不依赖它。
 
 `makepkg` 和行为测试应以普通用户执行。依赖安装由有权限的步骤完成；CI 使用 root 安装依赖，再以 `builder` 用户构建。需要补齐维护工具时，参考上述 CI 安装列表，在任务所用的 Arch 环境中安装。
+
+## 修改 Go 维护工具
+
+- Go 维护逻辑位于同一个 `internal/maintenance` 包内，按上表中的职责文件定位；包专属的来源、依赖和安装行为继续放在 PKGBUILD 及包目录中。
+- `internal/cli.Run` 负责解析参数和环境，再通过 `PrepareOptions`、`PublishOptions` 等值传给 Service。Service 保存仓库、已验证配置、Runner、HTTP client 和输出流；包、版本、候选及发布进度属于单次操作的局部状态。
+- 外部命令统一通过 Runner 执行，传入 context、Dir、Env 和输出流。ExecRunner 按合并后的 PATH 查找程序；不要用 `os.Chdir`、`os.Setenv` 或 shell 命令字符串建立隐式进程状态。CLI 已从普通子进程环境中移除发布凭据，凭据只在对应发布边界使用。
+- 配置和候选格式的兼容性由 `config.go`、`candidate.go` 及对应测试共同约束。候选校验只读取数据；publish 不执行候选 PKGBUILD。修改命令契约时，同步 CLI、调用它的工作流、行为测试和本指南中的示例。
+- Git 推送的 porcelain 状态只从 stdout 解析，stderr 与之分开；保留外部命令的底层错误。AUR 完成后的失败通过 `PublishError.AURSynced` 和 Stage 表达，恢复规则见下文。
+- 测试放在相应 Go 包中。新增真实工具用例使用 integration build tag，名称以 `TestIntegration` 或 `TestMakepkg` 开头，确保 CI 的筛选表达式会运行它们。复用隔离夹具和 Runner/HTTP client 边界，以候选内容、包内文件、Git refs/tree 和错误状态验证行为。
+- 集成夹具将完整 `cmd/`、`internal/` 和受信任配置复制到临时仓库，远端重写到本地 bare 仓库并限制 `GIT_ALLOW_PROTOCOL=file`；上游响应由 loopback HTTP 提供。拒绝 hook 使用当前 Go 工具链的绝对路径编译，不依赖业务子进程 PATH 中的 Go。保持这些隔离边界，避免测试触及生产远端或安装宿主依赖。
+- 修改 Go 源码后格式化受影响文件，并按文末执行验证；重新编译临时目录中的 maintpkg，避免继续使用修改前的二进制。
+
 
 ## 按需读取包文档
 
@@ -156,6 +175,8 @@ gh workflow run maintain-packages.yml \
 
 需要发布时在任务授权范围内使用相同工作流，将 `publish` 设为 `true`。推送到 main 本身只触发检查，发布由维护工作流处理；计划任务也会自动发布。
 
+维护工具或工作流上线时，先在实现分支以 `publish=false`、`force_build=true` 验证真实包构建，再合入 main 并执行单包生产运行。需要控制首次发布范围时，在上线变更中临时暂停 schedule，待该次运行结束后恢复；不要在候选发布途中修改受信任输入。`needs_publish=false` 时 publish job 正常跳过，构建成功不代表已验证真实 SSH 推送或 GitHub 写入。
+
 `publish` 需要 `SOURCE_COMMIT`、`GITHUB_TARGET_BRANCH`；有 AUR 写入时需要 `AUR_SSH_PRIVATE_KEY`，有 GitHub 回写时需要 `GITHUB_TOKEN`。CI 分别从同名 secret 和 `github.token` 提供凭据。AUR 使用固定 known_hosts、公钥校验及隔离 SSH 配置，不关闭主机校验，不将凭据写入仓库或文档。
 
 发布顺序与恢复规则：
@@ -178,13 +199,24 @@ gh workflow run maintain-packages.yml \
 
 ## 验证与交付
 
-修改配置、Go 源码或维护流程后，在仓库根目录以普通用户运行：
+按修改范围选择验证：Go 逻辑和配置契约变更运行下列测试；涉及真实工具、候选或发布行为时完成 integration 套件。工作流改动运行 `actionlint` 并核对受影响的 Actions 阶段。仅修改文档时，检查链接、路径与涉及的命令示例即可，无需重复完整集成套件。
+
+在仓库根目录执行；integration 套件必须使用普通用户：
 
 ```bash
 go test ./...
 go test -tags=integration ./... -run '^(TestIntegration|TestMakepkg)' -count=1 -timeout=20m
 ```
 
-默认测试仅使用标准库，不需要 Git/Arch 工具或网络。集成测试使用临时目录、本地 bare Git 仓库、测试 SSH 密钥和 loopback HTTP，调用真实 makepkg、updpkgsums、vercmp、pacman -T、Git、ssh-keygen 与 bsdtar；依赖安装边界不会实际执行宿主 pacman -S。缺少工具或以 root 运行会失败，不会静默跳过。测试会检查归档 payload 与 .INSTALL、候选不变性和远端 refs/tree；这不验证真实 SSH 握手或 GitHub 凭据。修改工作流时如环境提供 `actionlint`，运行它检查 YAML 与表达式。交付前还须实际构建 CLI，验证 help、当前配置的 matrix，以及仓库外的 `--repo` 调用。
+默认测试仅使用标准库，不需要 Git/Arch 工具或网络。集成测试使用临时目录、本地 bare Git 仓库、测试 SSH 密钥和 loopback HTTP，调用真实 makepkg、updpkgsums、vercmp、pacman -T、Git、ssh-keygen 与 bsdtar；依赖安装边界不会实际执行宿主 pacman -S。缺少工具或以 root 运行会失败，不会静默跳过。测试会检查归档 payload 与 .INSTALL、候选不变性和远端 refs/tree；这不验证真实 SSH 握手或 GitHub 凭据。
+
+CLI 变更后，先重新执行本文开头的构建和 matrix 命令，确认输出与当前配置中的启用列表一致；再用同一二进制检查 help 和仓库外调用：
+
+```bash
+: "${cli_bin_dir:?请先按上文编译 maintpkg}"
+: "${repo_root:?请先设置仓库根目录}"
+"$cli_bin_dir/maintpkg" --help
+(cd /tmp && "$cli_bin_dir/maintpkg" --repo "$repo_root" matrix)
+```
 
 配方变更还须构建实际目标包并验证受影响的运行路径，不能用 fixture 测试代替。交付时说明修改包及版本、执行的检查、构建/运行结果、是否进行了远端发布和确切失败点；未验证的架构或 GUI 路径如实注明。维护流程改变时同步更新本文件。
